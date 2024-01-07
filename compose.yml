@@ -1,0 +1,112 @@
+version: '3.5'
+services:
+  loadbalancer:
+    build:
+      context: nginx
+      dockerfile: Dockerfile
+    ports:
+      - "9090:9090"
+    networks:
+      - my-network
+    depends_on:
+      - servicelog
+
+
+  servicelog:
+    build:
+      context: LoggerExample
+      dockerfile: Dockerfile
+    environment:
+      JAVA_OPTIONS: >
+        -Dmicroservicelogger.machine_pool_name=pool1
+        -Dmicroservicelogger.service_name=sampleservice
+        -Dmicroservicelogger.topic_name=logs
+        -Dkafkacon=kafka:9092
+        -Dlb=loadbalancer:9090
+    expose:
+      - "8080"
+    networks:
+      - my-network
+    depends_on:
+      - kafka
+    links:
+      - kafka:kafka
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      - my-network
+    depends_on:
+      - kafka
+    links:
+      - kafka:kafka
+      
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: INSIDE://kafka:9092,OUTSIDE://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
+      KAFKA_LISTENERS: INSIDE://0.0.0.0:9092,OUTSIDE://0.0.0.0:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CREATE_TOPICS: logs
+    networks:
+      - my-network
+
+# Elasticsearch Docker Image
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.4.0
+    container_name: elasticsearch
+    # Make a port available to services outside of Docker
+    ports:
+      - 9200:9200
+      - 9300:9300
+
+    environment:
+      - discovery.type=single-node
+    # Configures docker image to run in bridge mode network
+    networks:
+      - my-network
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:6.4.0
+    container_name: kibana
+    # Make a port available to services outside of Docker
+    ports:
+      - 5601:5601
+    # It Links kibana container & elasticsearch container to communicate
+    links:
+      - elasticsearch:elasticsearch
+    # Configures docker image to run in bridge mode network
+    networks:
+      - my-network
+    # You can control the order of service startup and shutdown with the depends_on option.
+    depends_on: ['elasticsearch']
+
+ # Logstash Docker Image
+  logstash:
+    image: docker.elastic.co/logstash/logstash:6.4.0
+    container_name: logstash
+    # It Links elasticsearch container & kafkaserver container  & logstash container to communicate
+    links:
+      - elasticsearch:elasticsearch
+      - kafka:kafka
+    # Configures docker image to run in bridge mode network
+    networks:
+      - my-network
+    # You can control the order of service startup and shutdown with the depends_on option.
+    depends_on: ['elasticsearch', 'kafka']
+    # Mount host volumes into docker containers to supply logstash.config file
+    volumes:
+      - './private:/usr/share/logstash/pipeline/'
+
+
+networks:
+  my-network:
+    driver: bridge
